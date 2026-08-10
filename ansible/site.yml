@@ -1,0 +1,133 @@
+---
+- name: Configure EC2 instances - install base packages
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Update all packages
+      dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+
+    - name: Install Python3 and pip
+      dnf:
+        name:
+          - python3
+          - python3-pip
+        state: present
+
+    - name: Install Docker
+      dnf:
+        name: docker
+        state: present
+
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: true
+
+    - name: Create Docker CLI plugins directory
+      file:
+        path: /usr/local/lib/docker/cli-plugins
+        state: directory
+        mode: '0755'
+
+    - name: Download Docker Compose plugin binary
+      get_url:
+        url: https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64
+        dest: /usr/local/lib/docker/cli-plugins/docker-compose
+        mode: '0755'
+
+    - name: Verify Docker installation
+      command: docker --version
+      register: docker_version
+      changed_when: false
+
+    - name: Show Docker version
+      debug:
+        msg: "{{ docker_version.stdout }}"
+
+    - name: Verify Docker Compose installation
+      command: docker compose version
+      register: compose_version
+      changed_when: false
+
+    - name: Show Docker Compose version
+      debug:
+        msg: "{{ compose_version.stdout }}"
+
+    - name: Create devops user
+      user:
+        name: devops
+        groups: wheel,docker
+        append: true
+        shell: /bin/bash
+        create_home: true
+
+    - name: Set up authorized_keys for devops user
+      authorized_key:
+        user: devops
+        state: present
+        key: "{{ lookup('file', '~/.ssh/my-devops-key.pub') }}"
+
+    - name: Allow devops user passwordless sudo
+      copy:
+        dest: /etc/sudoers.d/devops
+        content: "devops ALL=(ALL) NOPASSWD:ALL\n"
+        mode: '0440'
+        validate: 'visudo -cf %s'
+
+    - name: Disable root SSH login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin no'
+        backup: true
+      notify: Restart sshd
+
+    - name: Disable password authentication (key-only SSH)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        backup: true
+      notify: Restart sshd
+
+    - name: Install Fail2Ban
+      dnf:
+        name: fail2ban
+        state: present
+
+    - name: Create Fail2Ban local jail config
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [sshd]
+          enabled = true
+          port = 22
+          filter = sshd
+          logpath = /var/log/secure
+          maxretry = 4
+          bantime = 3600
+          findtime = 600
+
+    - name: Start and enable Fail2Ban
+      systemd:
+        name: fail2ban
+        state: started
+        enabled: true
+
+  handlers:
+    - name: Restart sshd
+      systemd:
+        name: sshd
+        state: restarted
