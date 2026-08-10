@@ -44,3 +44,13 @@ terraform.rc
 # planout*.pem
 
 *.pem
+
+# Ansible Vault passphrase - committing this next to the encrypted vault file
+# would make the encryption pointless.
+.vault_pass
+vault_pass.txt
+.vault-password
+
+# Decrypted copies, e.g. from `ansible-vault decrypt --output`
+*.decrypted
+*.plaintext.yml
