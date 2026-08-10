@@ -1,0 +1,20 @@
+---
+# Default AMI login user. Ubuntu images use "ubuntu" (Amazon Linux used "ec2-user").
+ami_login_user: ubuntu
+
+# Group granting passwordless sudo. Debian/Ubuntu use "sudo"; RHEL family uses "wheel".
+admin_group: sudo
+
+# On Ubuntu the SSH unit is "ssh" ("sshd" only exists as an alias).
+ssh_service: ssh
+
+# ---------------------------------------------------------------------------
+# Secrets indirection
+#
+# Real values live encrypted in vault.yml as vault_*-prefixed variables; only
+# these pointers are ever in plaintext. Two reasons for the split:
+#   1. You can read this file to see WHICH secrets exist without decrypting.
+#   2. Playbooks reference the friendly name, so rotating a secret or swapping
+#      the vault backend never touches task code.
+# ---------------------------------------------------------------------------
+devops_password_hash: "{{ vault_devops_password_hash }}"

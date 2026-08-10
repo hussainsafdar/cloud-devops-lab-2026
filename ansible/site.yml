@@ -5,22 +5,28 @@
   gather_facts: true
 
   tasks:
-    - name: Update all packages
-      dnf:
-        name: "*"
-        state: latest
+    # cloud-init is still running apt at first boot; racing it causes
+    # "Could not get lock /var/lib/dpkg/lock-frontend" failures.
+    - name: Wait for cloud-init to finish
+      command: cloud-init status --wait
+      changed_when: false
+
+    - name: Update apt cache and upgrade all packages
+      apt:
+        upgrade: dist
         update_cache: true
+        cache_valid_time: 3600
 
     - name: Install Python3 and pip
-      dnf:
+      apt:
         name:
           - python3
           - python3-pip
         state: present
 
     - name: Install Docker
-      dnf:
-        name: docker
+      apt:
+        name: docker.io
         state: present
 
     - name: Start and enable Docker service
@@ -29,9 +35,9 @@
         state: started
         enabled: true
 
-    - name: Add ec2-user to docker group
+    - name: Add default login user to docker group
       user:
-        name: ec2-user
+        name: "{{ ami_login_user }}"
         groups: docker
         append: true
 
@@ -65,13 +71,17 @@
       debug:
         msg: "{{ compose_version.stdout }}"
 
+    # The password hash comes from the vault. no_log keeps it out of -v output
+    # and --diff, which would otherwise print it in plaintext to your terminal.
     - name: Create devops user
       user:
         name: devops
-        groups: wheel,docker
+        password: "{{ devops_password_hash }}"
+        groups: "{{ admin_group }},docker"
         append: true
         shell: /bin/bash
         create_home: true
+      no_log: true
 
     - name: Set up authorized_keys for devops user
       authorized_key:
@@ -86,39 +96,46 @@
         mode: '0440'
         validate: 'visudo -cf %s'
 
-    - name: Disable root SSH login
-      lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: '^#?PermitRootLogin'
-        line: 'PermitRootLogin no'
-        backup: true
-      notify: Restart sshd
-
-    - name: Disable password authentication (key-only SSH)
-      lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: '^#?PasswordAuthentication'
-        line: 'PasswordAuthentication no'
-        backup: true
+    # Ubuntu's sshd_config pulls in /etc/ssh/sshd_config.d/*.conf before its own
+    # settings, and sshd keeps the FIRST value it sees for each keyword. Editing
+    # the main file would be silently overridden by cloud-init's 50-cloud-init.conf,
+    # so drop in a fragment that sorts ahead of it.
+    - name: Harden sshd (no root login, key-only auth)
+      copy:
+        dest: /etc/ssh/sshd_config.d/01-devops-hardening.conf
+        content: |
+          PermitRootLogin no
+          PasswordAuthentication no
+          ChallengeResponseAuthentication no
+        mode: '0644'
+        validate: 'sshd -t -f %s'
       notify: Restart sshd
 
     - name: Install Fail2Ban
-      dnf:
-        name: fail2ban
+      apt:
+        name:
+          - fail2ban
+          - python3-systemd
         state: present
 
+    # Ubuntu server images have no /var/log/secure, and minimal images may not
+    # ship rsyslog at all, so read the journal directly instead of a log file.
     - name: Create Fail2Ban local jail config
       copy:
         dest: /etc/fail2ban/jail.local
+        mode: '0644'
         content: |
+          [DEFAULT]
+          backend = systemd
+
           [sshd]
           enabled = true
           port = 22
           filter = sshd
-          logpath = /var/log/secure
           maxretry = 4
           bantime = 3600
           findtime = 600
+      notify: Restart fail2ban
 
     - name: Start and enable Fail2Ban
       systemd:
@@ -129,5 +146,10 @@
   handlers:
     - name: Restart sshd
       systemd:
-        name: sshd
+        name: "{{ ssh_service }}"
+        state: restarted
+
+    - name: Restart fail2ban
+      systemd:
+        name: fail2ban
         state: restarted
