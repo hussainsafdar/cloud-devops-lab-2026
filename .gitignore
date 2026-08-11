@@ -54,3 +54,17 @@ vault_pass.txt
 # Decrypted copies, e.g. from `ansible-vault decrypt --output`
 *.decrypted
 *.plaintext.yml
+
+# Rendered on the app server by Ansible from the vault - never committed.
+.env
+
+# Python build/test artefacts. coverage.xml and junit.xml are produced by the
+# pipeline on every run; committing them makes every build show a diff.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+junit.xml
+.venv/
+venv/

@@ -55,12 +55,21 @@ resource "aws_eip" "bastion" {
 
 resource "aws_instance" "app" {
   ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.instance_type
+  instance_type          = var.app_instance_type
   subnet_id              = aws_subnet.private.id
   vpc_security_group_ids = [aws_security_group.app.id]
   key_name               = var.key_pair_name
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
   user_data              = local.bootstrap
+
+  # NOTE: no `encrypted = true` here on purpose. Toggling encryption forces the
+  # instance to be REPLACED (new instance, new private IP, re-run Ansible),
+  # whereas size and type changes are applied in place with a stop/start.
+  # Enable it the next time this instance is rebuilt from scratch.
+  root_block_device {
+    volume_size = var.app_root_volume_size
+    volume_type = "gp3"
+  }
 
   tags = {
     Name = "devops-lab-app-server"
