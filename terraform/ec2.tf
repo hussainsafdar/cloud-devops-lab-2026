@@ -1,6 +1,4 @@
-# Canonical's official Ubuntu 24.04 LTS (Noble) AMI.
-# Owner 099720109477 is Canonical - always pin the owner so a lookalike AMI name
-# from another account can never be selected.
+
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["099720109477"]
@@ -16,9 +14,7 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-# Canonical's images ship ec2-instance-connect and the SSM agent, but both are
-# what our console-Connect and break-glass access depend on, so make sure they
-# are present and running rather than assuming it.
+
 locals {
   bootstrap = <<-EOT
     #!/bin/bash

@@ -47,10 +47,26 @@ variable "key_pair_name" {
   type        = string
 }
 
-# No default on purpose: a stale hardcoded IP here silently locks you out of the
-# bastion. Set it in terraform.tfvars and refresh it when your ISP IP changes
-# (curl -s https://checkip.amazonaws.com).
+# ===========================================================================
+#  >>> EDIT THIS ONE LINE WHEN YOUR WIFI / NETWORK CHANGES, THEN: terraform apply
+#
+#  1. curl -s https://checkip.amazonaws.com
+#  2. Paste the result below, keeping the /32
+#  3. terraform apply
+#
+#  This is the ONLY place your IP is defined. Do not also put my_ip_cidr in
+#  terraform.tfvars - a .tfvars value silently overrides this default, so
+#  editing here would appear to do nothing.
+# ===========================================================================
 variable "my_ip_cidr" {
-  description = "Your public IP address for SSH access (e.g. 1.2.3.4/32)"
+  description = "Your public IP for SSH access to the bastion (e.g. 1.2.3.4/32)"
   type        = string
+  default     = "139.135.55.206/32"
+
+  validation {
+    # Catches a bare IP with no mask, which AWS rejects with a much less
+    # obvious error part-way through the apply.
+    condition     = can(cidrhost(var.my_ip_cidr, 0))
+    error_message = "my_ip_cidr must include a mask, e.g. 1.2.3.4/32 (a bare IP will not work)."
+  }
 }
