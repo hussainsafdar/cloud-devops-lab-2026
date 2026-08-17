@@ -23,9 +23,33 @@ variable "private_subnet_cidr" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type"
+  description = "EC2 instance type for the bastion (it only relays SSH)"
   type        = string
   default     = "t3.micro"
+}
+
+# The app server runs the CI/CD stack. SonarQube's documented minimum is 2 GB
+# on its own (it embeds Elasticsearch), plus ~1 GB Jenkins and ~256 MB Postgres,
+# so t3.medium would be the correct size.
+#
+# Held at t3.micro to stay inside the AWS free tier. To make that survivable,
+# ansible/deploy-stack.yml adds a 4 GB swap file and docker-compose.yml caps
+# every JVM heap. Expect slow startup and sluggish UIs - this is under spec, not
+# a recommended configuration. Change to t3.medium if the free tier stops
+# mattering.
+variable "app_instance_type" {
+  description = "EC2 instance type for the app server running Jenkins + SonarQube"
+  type        = string
+  default     = "t3.micro"
+}
+
+# Default Ubuntu root volume is 8 GB, of which only ~3 GB is free - not enough
+# for three images plus a 4 GB swap file. The free tier includes 30 GB of EBS,
+# so this costs nothing.
+variable "app_root_volume_size" {
+  description = "Root volume size in GB for the app server"
+  type        = number
+  default     = 30
 }
 
 # Default login user baked into the AMI. Ubuntu images use "ubuntu";
@@ -61,7 +85,7 @@ variable "key_pair_name" {
 variable "my_ip_cidr" {
   description = "Your public IP for SSH access to the bastion (e.g. 1.2.3.4/32)"
   type        = string
-  default     = "139.135.55.206/32"
+  default     = "103.134.3.68/32"
 
   validation {
     # Catches a bare IP with no mask, which AWS rejects with a much less

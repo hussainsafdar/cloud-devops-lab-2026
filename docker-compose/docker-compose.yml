@@ -1,0 +1,170 @@
+# CI/CD stack: Jenkins + SonarQube + Postgres
+#
+# Deployed to the app server by ansible/deploy-stack.yml.
+# Secrets come from a .env file that Ansible renders from Ansible Vault -
+# no password is written in this file.
+#
+#   docker compose up -d
+#   docker compose ps
+#   docker compose logs -f sonarqube
+
+services:
+  app:
+    # Built from source copied to the host by Ansible, not pulled from a
+    # registry - there is no registry in this lab yet.
+    build:
+      context: ./app
+    image: devops-lab-app:local
+    container_name: devops-lab-app
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:5000:5000"
+
+    environment:
+      APP_VERSION: "1.0.0"
+
+    # Small enough that a hard cap is safe, and it guarantees the app can never
+    # starve SonarQube on this 1 GB host.
+    mem_limit: 128m
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  jenkins:
+    # Custom image: stock jenkins/jenkins:lts has no docker or aws CLI, both of
+    # which the pipeline needs. See jenkins/Dockerfile.
+    build:
+      context: ./jenkins
+    image: devops-lab-jenkins:local
+    container_name: jenkins
+    restart: unless-stopped
+
+    # The docker group on the host, so the jenkins user (uid 1000) can use the
+    # mounted socket. Verify with: getent group docker | cut -d: -f3
+    group_add:
+      - "113"
+
+    ports:
+      # Bound to 127.0.0.1 deliberately. The app server has no public IP, but
+      # this also stops anything else inside the VPC reaching the UI. Access is
+      # via SSH tunnel:  ssh -L 8080:localhost:8080 app
+      - "127.0.0.1:8080:8080"
+      # Agent port, for build agents connecting back to the controller.
+      - "127.0.0.1:50000:50000"
+
+    volumes:
+      # Named volume, not a bind mount: the image runs as uid 1000 and a host
+      # directory would need matching ownership before Jenkins could write.
+      - jenkins_home:/var/jenkins_home
+      # Lets the pipeline start sibling containers (pytest, sonar-scanner) on
+      # the host daemon.
+      #
+      # SECURITY: this grants the Jenkins container effective root on the host -
+      # anyone who can run a job can mount / and escape. Acceptable for a
+      # single-user lab; a real setup would use a remote agent or rootless
+      # daemon instead.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read-only so the deploy stage can run `docker compose up -d app`
+      # against the same stack definition Ansible manages.
+      - /opt/devops-stack:/opt/devops-stack:ro
+
+    environment:
+      # Heap capped hard: this host has 1 GB RAM (free tier) and must also fit
+      # SonarQube and Postgres. Jenkins' default heap would claim a quarter of
+      # physical RAM on its own.
+      JAVA_OPTS: "-Djenkins.install.runSetupWizard=true -Xms128m -Xmx320m"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  db:
+    image: postgres:16-alpine
+    container_name: sonar-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_DB: sonar
+      # Supplied by .env, which Ansible renders from the vault.
+      POSTGRES_PASSWORD: ${SONAR_DB_PASSWORD:?SONAR_DB_PASSWORD must be set in .env}
+
+    # Trimmed from the 128 MB default to leave room for the JVMs.
+    command: >
+      postgres -c shared_buffers=32MB -c max_connections=50
+
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+
+    # Never published to a host port. Only SonarQube reaches it, over the
+    # internal compose network.
+    expose:
+      - "5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonar -d sonar"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  sonarqube:
+    image: sonarqube:lts-community
+    container_name: sonarqube
+    restart: unless-stopped
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    ports:
+      - "127.0.0.1:9000:9000"
+
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://db:5432/sonar
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: ${SONAR_DB_PASSWORD:?SONAR_DB_PASSWORD must be set in .env}
+
+      # SonarQube runs three JVMs (web, compute engine, Elasticsearch). Their
+      # defaults total well over 2 GB, which cannot fit on a 1 GB host. These
+      # are the practical floors - going lower makes Elasticsearch fail its
+      # bootstrap checks.
+      SONAR_WEB_JAVAOPTS: "-Xms128m -Xmx384m"
+      SONAR_CE_JAVAOPTS: "-Xms128m -Xmx256m"
+      SONAR_SEARCH_JAVAOPTS: "-Xms256m -Xmx256m"
+
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+
+    # SonarQube embeds Elasticsearch, which mmaps heavily. The host needs
+    # vm.max_map_count >= 524288 or the container refuses to start; the Ansible
+    # playbook sets and persists it.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    healthcheck:
+      # The sonarqube image ships wget but NOT curl, so a curl-based check fails
+      # every time and marks the container unhealthy while SonarQube is fine.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+volumes:
+  jenkins_home:
+  postgresql_data:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:

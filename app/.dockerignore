@@ -1,0 +1,13 @@
+# Keep the build context small and avoid baking test/CI artefacts into the image.
+tests/
+requirements-dev.txt
+.pytest_cache/
+__pycache__/
+*.pyc
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+.git/
+.gitignore

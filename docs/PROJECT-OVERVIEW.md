@@ -25,9 +25,9 @@ and how to operate it.
 | 10 | Fail2Ban or UFW | ✅ |
 | 11 | devops user + root SSH disabled | ✅ |
 | 12 | Ansible Vault for secrets | ✅ |
-| 13 | Jenkins credentials in SSM Parameter Store | ⚠️ **partial** |
+| 13 | Jenkins credentials in SSM Parameter Store | ✅ |
 
-**12 of 13 complete.** See [Remaining work](#remaining-work) for what's left on #13.
+**13 of 13 complete.** All items verified end-to-end against live infrastructure.
 
 ---
 
@@ -247,13 +247,50 @@ Encryption: AES-256, key derived from your passphrase with PBKDF2 (10,000 rounds
 32-byte salt), HMAC for tamper detection. Decrypted in memory at runtime only.
 The passphrase lives in `ansible/.vault_pass`, which is gitignored.
 
-### 13. SSM Parameter Store — ⚠️ partial
+### 13. SSM Parameter Store — [`terraform/ssm.tf`](../terraform/ssm.tf)
 
-**Done:** `/devops-lab/jenkins/admin-password` exists as a `SecureString`, encrypted
-at rest with the account's `aws/ssm` KMS key. Nothing is hardcoded anywhere.
+Three parameters under `/devops-lab/jenkins/`, encrypted at rest with the
+account's `aws/ssm` KMS key:
 
-**Not done:** the EC2 role has no SSM read permission, so the instance **cannot
-retrieve it**. See [Remaining work](#remaining-work).
+| Parameter | Type |
+|---|---|
+| `admin-user` | String |
+| `admin-password` | SecureString |
+| `api-token` | SecureString |
+
+The IAM policy `devops-lab-jenkins-ssm-read` is attached to the EC2 role, scoped
+to this path only. **Only the permission is in Terraform** — the parameter values
+are set out-of-band with the AWS CLI, because an `aws_ssm_parameter` resource
+would write the secret into Terraform state, which is precisely what "not
+hardcoded" is meant to prevent.
+
+**Verified from the app server, with no credentials stored on it:**
+
+```
+identity : arn:aws:sts::094842496346:assumed-role/devops-lab-ec2-role/i-093c...
+list     : all 3 parameters returned
+read     : all 3 read, both SecureStrings decrypted
+denied   : writing to /other-app/secret -> AccessDenied
+```
+
+That last line is the important one: the policy is genuinely path-scoped, not
+wide open.
+
+#### Two IAM details that cause silent failures
+
+**1. `GetParametersByPath` needs a second ARN.** `GetParameter` acts on the
+individual parameter (`.../jenkins/admin-password`, matched by the `/*` form),
+but `GetParametersByPath` acts on **the path itself** (`.../jenkins`, no
+trailing `/*`). Granting only `/*` makes listing fail with `AccessDenied` while
+individual reads keep working — a confusing half-broken state. Both ARNs are
+listed in the policy.
+
+**2. `kms:Decrypt` is mandatory.** SecureString values come back still encrypted
+unless the caller can use the KMS key, so `--with-decryption` fails with
+`AccessDenied` without it. IAM does not accept KMS *alias* ARNs in `Resource`,
+so the policy uses `"*"` constrained by a `kms:ViaService` condition — the role
+may use the key only for requests arriving through SSM, never for direct KMS
+calls.
 
 #### Why credentials belong in SSM rather than a Jenkinsfile
 
@@ -365,49 +402,7 @@ sudo snap install aws-cli --classic
 
 ## Remaining work
 
-### Finish #13 — grant the role SSM read access
-
-Console: **IAM → Roles → `devops-lab-ec2-role` → Add permissions → Create inline
-policy → JSON**, named `jenkins-ssm-read`:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ReadJenkinsParameters",
-      "Effect": "Allow",
-      "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
-      "Resource": "arn:aws:ssm:us-east-1:094842496346:parameter/devops-lab/jenkins/*"
-    },
-    {
-      "Sid": "DecryptSecureStrings",
-      "Effect": "Allow",
-      "Action": "kms:Decrypt",
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": { "kms:ViaService": "ssm.us-east-1.amazonaws.com" }
-      }
-    }
-  ]
-}
-```
-
-The second statement is **not optional**. SecureString values are returned still
-encrypted unless the caller can use the KMS key, so `--with-decryption` fails with
-`AccessDenied` without it. Note that IAM does not accept KMS *alias* ARNs in
-`Resource` — the `kms:ViaService` condition is the correct way to scope it, and it
-restricts this key's use to requests arriving through SSM.
-
-Verify from the app server — this is the proof the exercise is really asking for,
-since it authenticates with no stored credentials:
-
-```bash
-ssh app
-sudo snap install aws-cli --classic
-aws ssm get-parameter --name /devops-lab/jenkins/admin-password \
-  --with-decryption --region us-east-1 --query Parameter.Value --output text
-```
+All 13 checklist items are complete. What follows is optional hardening.
 
 ### Optional improvements
 
@@ -417,7 +412,6 @@ aws ssm get-parameter --name /devops-lab/jenkins/admin-password \
 | Dynamic inventory (`aws_ec2` plugin) | Ends the stale-IP problem permanently |
 | Migrate `dynamodb_table` → `use_lockfile` | Silences the deprecation warning |
 | Second AZ | Real high availability |
-| Add the remaining SSM parameters | `admin-user`, `api-token` — only `admin-password` exists |
 
 ---
 

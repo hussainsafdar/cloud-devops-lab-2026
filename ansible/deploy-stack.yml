@@ -1,0 +1,246 @@
+---
+- name: Deploy the CI/CD stack (Jenkins + SonarQube + Postgres)
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars:
+    stack_dir: /opt/devops-stack
+    swap_file: /swapfile
+    swap_size_mb: 4096
+
+  tasks:
+    # ---------------------------------------------------------------------
+    # Swap. This host has 1 GB of RAM (t3.micro, free tier) and the stack
+    # needs more. Swap does not make it fast - it stops the OOM killer from
+    # terminating SonarQube mid-startup. Without this the stack will not come
+    # up on this instance size.
+    # ---------------------------------------------------------------------
+    - name: Check whether the swap file already exists
+      stat:
+        path: "{{ swap_file }}"
+      register: swap_stat
+
+    - name: Allocate the swap file
+      command: "fallocate -l {{ swap_size_mb }}M {{ swap_file }}"
+      when: not swap_stat.stat.exists
+
+    - name: Restrict swap file permissions
+      file:
+        path: "{{ swap_file }}"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Format the swap file
+      command: "mkswap {{ swap_file }}"
+      when: not swap_stat.stat.exists
+
+    - name: Enable swap now
+      command: "swapon {{ swap_file }}"
+      when: not swap_stat.stat.exists
+      failed_when: false
+
+    - name: Persist swap across reboots
+      mount:
+        name: none
+        src: "{{ swap_file }}"
+        fstype: swap
+        opts: sw
+        state: present
+
+    # Default is 60. Lowering it tells the kernel to prefer RAM and only reach
+    # for swap under real pressure, which keeps the JVMs responsive.
+    - name: Lower swappiness
+      sysctl:
+        name: vm.swappiness
+        value: '10'
+        sysctl_file: /etc/sysctl.d/99-sonarqube.conf
+        state: present
+        reload: true
+
+    # SonarQube embeds Elasticsearch, which refuses to start below this value.
+    # sysctl_file makes it survive a reboot; without that the stack comes back
+    # broken after any restart.
+    - name: Raise vm.max_map_count for SonarQube's Elasticsearch
+      sysctl:
+        name: vm.max_map_count
+        value: '524288'
+        sysctl_file: /etc/sysctl.d/99-sonarqube.conf
+        state: present
+        reload: true
+
+    - name: Raise fs.file-max for SonarQube
+      sysctl:
+        name: fs.file-max
+        value: '131072'
+        sysctl_file: /etc/sysctl.d/99-sonarqube.conf
+        state: present
+        reload: true
+
+    - name: Re-read memory facts now that swap is on
+      setup:
+        filter: ansible_memory_mb
+
+    # RAM + swap must clear ~4 GB. On t3.micro that is almost entirely swap,
+    # which works but is slow - the check exists to catch a host where swap
+    # silently failed to enable, not to certify the sizing as good.
+    - name: Fail early if total memory (RAM + swap) is too small
+      assert:
+        that: >-
+          (ansible_memtotal_mb | int) +
+          (ansible_memory_mb.swap.total | default(0) | int) >= 3500
+        fail_msg: >-
+          Only {{ ansible_memtotal_mb }} MB RAM +
+          {{ ansible_memory_mb.swap.total | default(0) }} MB swap. SonarQube
+          needs ~2 GB on its own. Either the swap file failed to enable, or
+          resize the instance to t3.medium.
+        success_msg: >-
+          {{ ansible_memtotal_mb }} MB RAM +
+          {{ ansible_memory_mb.swap.total | default(0) }} MB swap - workable.
+
+    - name: Create the stack directory
+      file:
+        path: "{{ stack_dir }}"
+        state: directory
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0750'
+
+    - name: Copy the compose file
+      copy:
+        src: ../docker-compose/docker-compose.yml
+        dest: "{{ stack_dir }}/docker-compose.yml"
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0640'
+      notify: Restart the stack
+
+    # The app image is built on the host, so its source has to be there.
+    # Trailing slash on src copies the directory contents into app/.
+    - name: Copy the application source (build context)
+      copy:
+        src: ../app/
+        dest: "{{ stack_dir }}/app/"
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0644'
+        directory_mode: '0755'
+      register: app_source
+      notify: Restart the stack
+
+    # Jenkins is also built locally now: the stock image has no docker or aws
+    # CLI, and the pipeline needs both.
+    - name: Copy the Jenkins image build context
+      copy:
+        src: ../jenkins/
+        dest: "{{ stack_dir }}/jenkins/"
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0644'
+        directory_mode: '0755'
+      register: jenkins_source
+      notify: Restart the stack
+
+    - name: Rebuild locally built images when their source changed
+      command:
+        cmd: "docker compose build {{ item.service }}"
+        chdir: "{{ stack_dir }}"
+      loop:
+        - { service: app, changed: "{{ app_source.changed }}" }
+        - { service: jenkins, changed: "{{ jenkins_source.changed }}" }
+      when: item.changed
+      notify: Restart the stack
+
+    # group_add on the jenkins service must match the host's docker group, or
+    # the container gets permission denied on the mounted socket. The GID is
+    # not stable across images, so assert rather than assume.
+    - name: Read the host docker group id
+      command: getent group docker
+      register: docker_group
+      changed_when: false
+
+    - name: Fail if the compose file's group_add does not match the host
+      assert:
+        that: "docker_group.stdout.split(':')[2] in lookup('file', '../docker-compose/docker-compose.yml')"
+        fail_msg: >-
+          Host docker GID is {{ docker_group.stdout.split(':')[2] }} but
+          docker-compose.yml does not reference it in group_add. Jenkins will
+          not be able to use /var/run/docker.sock.
+
+    # The database password comes from the vault and lands only here, in a
+    # 0600 file that compose reads. no_log keeps it out of -v and --diff output.
+    - name: Render .env with secrets from the vault
+      copy:
+        dest: "{{ stack_dir }}/.env"
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0600'
+        content: |
+          SONAR_DB_PASSWORD={{ sonar_db_password }}
+      no_log: true
+      notify: Restart the stack
+
+    # --ignore-buildable skips services with a `build:` section. Without it,
+    # compose tries to pull devops-lab-app from a registry it was never pushed
+    # to and fails with "pull access denied".
+    - name: Pull images for services that come from a registry
+      command:
+        cmd: docker compose pull --ignore-buildable
+        chdir: "{{ stack_dir }}"
+      register: pull_result
+      changed_when: "'Pulled' in pull_result.stderr or 'Downloaded' in pull_result.stderr"
+
+    - name: Start the stack
+      command:
+        cmd: docker compose up -d --remove-orphans
+        chdir: "{{ stack_dir }}"
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+
+    - name: Wait for the app to answer its health check
+      uri:
+        url: http://127.0.0.1:5000/health
+        return_content: true
+      register: app_up
+      until: app_up.json.status is defined and app_up.json.status == 'ok'
+      retries: 20
+      delay: 5
+
+    - name: Wait for Jenkins to answer
+      uri:
+        url: http://127.0.0.1:8080/login
+        status_code: 200
+      register: jenkins_up
+      until: jenkins_up.status == 200
+      retries: 30
+      delay: 10
+
+    - name: Wait for SonarQube to report UP
+      uri:
+        url: http://127.0.0.1:9000/api/system/status
+        return_content: true
+      register: sonar_up
+      until: sonar_up.json.status is defined and sonar_up.json.status == 'UP'
+      retries: 40
+      delay: 15
+
+    - name: Read Jenkins initial admin password
+      command: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+      register: jenkins_initial_pw
+      changed_when: false
+      failed_when: false
+
+    - name: Show how to reach the stack
+      debug:
+        msg:
+          - "Jenkins   http://localhost:8080  (ssh -L 8080:localhost:8080 app)"
+          - "SonarQube http://localhost:9000  (ssh -L 9000:localhost:9000 app)"
+          - "SonarQube default login: admin / admin"
+          - "Jenkins initial password is in /var/jenkins_home/secrets/initialAdminPassword"
+
+  handlers:
+    - name: Restart the stack
+      command:
+        cmd: docker compose up -d
+        chdir: "{{ stack_dir }}"
