@@ -85,7 +85,7 @@ variable "key_pair_name" {
 variable "my_ip_cidr" {
   description = "Your public IP for SSH access to the bastion (e.g. 1.2.3.4/32)"
   type        = string
-  default     = "139.135.55.206/32"
+  default     = "103.134.3.68/32"
 
   validation {
     # Catches a bare IP with no mask, which AWS rejects with a much less
