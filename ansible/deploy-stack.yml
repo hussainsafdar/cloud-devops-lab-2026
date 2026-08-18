@@ -116,6 +116,36 @@
         mode: '0640'
       notify: Restart the stack
 
+    - name: Copy the Prometheus config
+      copy:
+        src: ../docker-compose/prometheus/
+        dest: "{{ stack_dir }}/prometheus/"
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0644'
+        directory_mode: '0755'
+      notify: Restart the stack
+
+    - name: Copy the Grafana provisioning config
+      copy:
+        src: ../docker-compose/grafana/
+        dest: "{{ stack_dir }}/grafana/"
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0644'
+        directory_mode: '0755'
+      notify: Restart the stack
+
+    - name: Copy the Nginx config
+      copy:
+        src: ../docker-compose/nginx/
+        dest: "{{ stack_dir }}/nginx/"
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0644'
+        directory_mode: '0755'
+      notify: Restart the stack
+
     # The app image is built on the host, so its source has to be there.
     # Trailing slash on src copies the directory contents into app/.
     - name: Copy the application source (build context)
@@ -142,6 +172,21 @@
       register: jenkins_source
       notify: Restart the stack
 
+    - name: Render .env with secrets from the vault
+      copy:
+        dest: "{{ stack_dir }}/.env"
+        owner: "{{ ami_login_user }}"
+        group: "{{ ami_login_user }}"
+        mode: '0600'
+        content: |
+          SONAR_DB_PASSWORD={{ sonar_db_password }}
+          GRAFANA_ADMIN_PASSWORD={{ grafana_admin_password }}
+      no_log: true
+      notify: Restart the stack
+
+    # --ignore-buildable skips services with a `build:` section. Without it,
+    # compose tries to pull devops-lab-app from a registry it was never pushed
+    # to and fails with "pull access denied".
     - name: Rebuild locally built images when their source changed
       command:
         cmd: "docker compose build {{ item.service }}"
@@ -170,20 +215,6 @@
 
     # The database password comes from the vault and lands only here, in a
     # 0600 file that compose reads. no_log keeps it out of -v and --diff output.
-    - name: Render .env with secrets from the vault
-      copy:
-        dest: "{{ stack_dir }}/.env"
-        owner: "{{ ami_login_user }}"
-        group: "{{ ami_login_user }}"
-        mode: '0600'
-        content: |
-          SONAR_DB_PASSWORD={{ sonar_db_password }}
-      no_log: true
-      notify: Restart the stack
-
-    # --ignore-buildable skips services with a `build:` section. Without it,
-    # compose tries to pull devops-lab-app from a registry it was never pushed
-    # to and fails with "pull access denied".
     - name: Pull images for services that come from a registry
       command:
         cmd: docker compose pull --ignore-buildable
@@ -209,7 +240,7 @@
 
     - name: Wait for Jenkins to answer
       uri:
-        url: http://127.0.0.1:8080/login
+        url: http://127.0.0.1:8080/jenkins/login
         status_code: 200
       register: jenkins_up
       until: jenkins_up.status == 200
@@ -218,7 +249,7 @@
 
     - name: Wait for SonarQube to report UP
       uri:
-        url: http://127.0.0.1:9000/api/system/status
+        url: http://127.0.0.1:9000/sonar/api/system/status
         return_content: true
       register: sonar_up
       until: sonar_up.json.status is defined and sonar_up.json.status == 'UP'
@@ -234,8 +265,8 @@
     - name: Show how to reach the stack
       debug:
         msg:
-          - "Jenkins   http://localhost:8080  (ssh -L 8080:localhost:8080 app)"
-          - "SonarQube http://localhost:9000  (ssh -L 9000:localhost:9000 app)"
+          - "Jenkins   http://localhost:8080/jenkins  (ssh -L 8080:localhost:8080 app)"
+          - "SonarQube http://localhost:9000/sonar  (ssh -L 9000:localhost:9000 app)"
           - "SonarQube default login: admin / admin"
           - "Jenkins initial password is in /var/jenkins_home/secrets/initialAdminPassword"
 
