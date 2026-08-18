@@ -61,7 +61,7 @@ data "aws_iam_policy_document" "jenkins_ssm_read" {
 
 resource "aws_iam_policy" "jenkins_ssm_read" {
   name        = "devops-lab-jenkins-ssm-read"
-  description = "Read Jenkins credentials from SSM Parameter Store"
+  description = "Read devops-lab application secrets from SSM Parameter Store"
   policy      = data.aws_iam_policy_document.jenkins_ssm_read.json
 }
 

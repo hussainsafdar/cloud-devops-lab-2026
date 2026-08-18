@@ -61,9 +61,9 @@ variable "ssh_user" {
 }
 
 variable "ssm_parameter_prefix" {
-  description = "SSM Parameter Store path prefix for Jenkins credentials"
+  description = "SSM Parameter Store path prefix for devops-lab application secrets"
   type        = string
-  default     = "/devops-lab/jenkins"
+  default     = "/devops-lab"
 }
 
 variable "key_pair_name" {

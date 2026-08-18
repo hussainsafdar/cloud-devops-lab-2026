@@ -9,11 +9,13 @@ import os
 import socket
 
 from flask import Flask, jsonify, request
+from prometheus_flask_exporter import PrometheusMetrics
 
 APP_NAME = "devops-lab-app"
 APP_VERSION = os.environ.get("APP_VERSION", "1.0.0")
 
 app = Flask(__name__)
+metrics = PrometheusMetrics(app)
 
 
 @app.get("/")

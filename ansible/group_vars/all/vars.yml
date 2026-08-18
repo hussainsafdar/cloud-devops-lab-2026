@@ -22,3 +22,5 @@ devops_password_hash: "{{ vault_devops_password_hash }}"
 # Postgres password backing SonarQube. Consumed by docker-compose via a
 # rendered .env file - never written into docker-compose.yml itself.
 sonar_db_password: "{{ vault_sonar_db_password }}"
+# Grafana admin password, same pattern - never written into docker-compose.yml.
+grafana_admin_password: "{{ vault_grafana_admin_password }}"
