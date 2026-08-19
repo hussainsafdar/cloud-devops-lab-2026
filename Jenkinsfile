@@ -1,27 +1,9 @@
-// CI/CD pipeline for the Flask app: test -> analyse -> build -> deploy.
-//
-// Design notes that matter if you change anything here:
-//
-//  * Build steps run as SIBLING containers on the host daemon, via the mounted
-//    docker socket. There is no docker daemon inside Jenkins.
-//
-//  * Every sibling container uses `--volumes-from jenkins`. The workspace lives
-//    in the jenkins_home named volume, so its path on the HOST is not
-//    $WORKSPACE. A plain `-v $WORKSPACE:/src` would mount an empty directory -
-//    silently, with no error. --volumes-from gives the sibling the identical
-//    mount, so $WORKSPACE resolves the same in both.
-//
-//  * The SonarQube token is read from SSM Parameter Store at build time using
-//    the EC2 instance role. It is never stored in Jenkins credentials, in this
-//    file, or in the image.
-
 pipeline {
     agent any
 
     options {
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        // This host has 1 GB of RAM; a wedged build must not hold it forever.
         timeout(time: 30, unit: 'MINUTES')
     }
 
@@ -77,9 +59,6 @@ pipeline {
 
         stage('SonarQube analysis') {
             steps {
-                // The token is fetched, used, and discarded inside one shell.
-                // set +x around it keeps it out of the console log even when
-                // the shell is tracing.
                 sh '''
                     set -eu
                     set +x
@@ -112,10 +91,36 @@ pipeline {
             }
         }
 
+        stage('Push image') {
+            steps {
+                sh '''
+                    set -eu
+                    set +x
+                    DOCKERHUB_USER=$(aws ssm get-parameter \
+                        --name "/devops-lab/dockerhub/username" \
+                        --query Parameter.Value \
+                        --output text)
+                    DOCKERHUB_TOKEN=$(aws ssm get-parameter \
+                        --name "/devops-lab/dockerhub/token" \
+                        --with-decryption \
+                        --query Parameter.Value \
+                        --output text)
+
+                    echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+
+                    docker tag "$IMAGE_NAME:$BUILD_NUMBER" "$DOCKERHUB_USER/$IMAGE_NAME:$BUILD_NUMBER"
+                    docker tag "$IMAGE_NAME:$BUILD_NUMBER" "$DOCKERHUB_USER/$IMAGE_NAME:latest"
+
+                    docker push "$DOCKERHUB_USER/$IMAGE_NAME:$BUILD_NUMBER"
+                    docker push "$DOCKERHUB_USER/$IMAGE_NAME:latest"
+
+                    docker logout
+                '''
+            }
+        }
+
         stage('Deploy') {
             steps {
-                // --no-deps so a redeploy of the app never restarts Jenkins,
-                // SonarQube or the database underneath itself.
                 sh '''
                     set -eu
                     docker compose -f /opt/devops-stack/docker-compose.yml up -d --no-deps app
@@ -145,8 +150,6 @@ pipeline {
 
     post {
         always {
-            // Old images accumulate fast on a 30 GB disk with three JVM images
-            // already present.
             sh 'docker image prune -f --filter "until=168h" || true'
         }
         success {
