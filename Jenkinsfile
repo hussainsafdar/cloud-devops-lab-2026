@@ -9,7 +9,7 @@ pipeline {
 
     environment {
         AWS_DEFAULT_REGION = 'us-east-1'
-        SONAR_HOST         = 'http://sonarqube:9000'
+        SONAR_HOST         = 'http://sonarqube:9000/sonar'
         STACK_NETWORK      = 'devops-stack_default'
         IMAGE_NAME         = 'devops-lab-app'
         SSM_SONAR_TOKEN    = '/devops-lab/sonarqube/token'
