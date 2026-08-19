@@ -79,6 +79,19 @@ pipeline {
             }
         }
 
+        stage('Fix workspace permissions') {
+            steps {
+                sh '''
+                    set -eu
+                    docker run --rm \
+                      --volumes-from jenkins \
+                      -w "$WORKSPACE/app" \
+                      python:3.12-slim \
+                      chown -R 1000:1000 .
+                '''
+            }
+        }
+
         stage('Build image') {
             steps {
                 sh '''
