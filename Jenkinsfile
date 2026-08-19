@@ -42,6 +42,20 @@ pipeline {
             }
         }
 
+        stage('Lint') {
+            steps {
+                sh '''
+                    set -eu
+                    docker run --rm \
+                      --volumes-from jenkins \
+                      -w "$WORKSPACE/app" \
+                      python:3.12-slim \
+                      sh -c "pip install --quiet --no-cache-dir ruff==0.8.4 \
+                             && ruff check ."
+                '''
+            }
+        }
+
         stage('Test') {
             steps {
                 sh '''
