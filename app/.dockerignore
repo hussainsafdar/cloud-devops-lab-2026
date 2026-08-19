@@ -11,3 +11,4 @@ htmlcov/
 venv/
 .git/
 .gitignore
+.ruff_cache/
