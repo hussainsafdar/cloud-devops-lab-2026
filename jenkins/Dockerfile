@@ -31,4 +31,7 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -
  && /tmp/aws/install \
  && rm -rf /tmp/aws /tmp/awscli.zip
 
+# Prometheus metrics plugin, so Prometheus can scrape Jenkins build/queue
+# metrics directly rather than needing a separate exporter sidecar.
 USER jenkins
+RUN jenkins-plugin-cli --plugins prometheus
