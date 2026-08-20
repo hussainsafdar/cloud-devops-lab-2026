@@ -1,0 +1,29 @@
+groups:
+  - name: devops-lab-alerts
+    rules:
+      - alert: JenkinsDown
+        expr: up{job="jenkins"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Jenkins has been down for more than 5 minutes"
+          description: "Prometheus cannot scrape the Jenkins metrics endpoint. Check the jenkins container on the app server."
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 70
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "EC2 CPU usage above 70% for 5+ minutes"
+          description: "Instance {{ $labels.instance }} has sustained CPU usage over 70%."
+
+      - alert: AppDown
+        expr: up{job="app"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The Flask app has been unreachable for 5+ minutes"
+          description: "Prometheus cannot scrape the app's /metrics endpoint."
