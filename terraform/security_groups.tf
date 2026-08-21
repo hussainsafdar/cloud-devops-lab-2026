@@ -20,6 +20,16 @@ resource "aws_security_group" "bastion" {
     cidr_blocks = [var.my_ip_cidr]
   }
 
+  # Public HTTP - Nginx on this bastion reverse-proxies to the private app
+  # server. Deliberately open to the internet, unlike every other rule here.
+  ingress {
+    description = "Public HTTP for the app reverse proxy"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   # SSH from the EC2 Instance Connect service so the console Connect tab works
   ingress {
     description     = "SSH from EC2 Instance Connect service"
@@ -50,6 +60,13 @@ resource "aws_security_group" "app" {
     description     = "SSH from bastion"
     from_port       = 22
     to_port         = 22
+    protocol        = "tcp"
+    security_groups = [aws_security_group.bastion.id]
+  }
+  ingress {
+    description     = "App port from bastion (for public reverse proxy)"
+    from_port       = 5000
+    to_port         = 5000
     protocol        = "tcp"
     security_groups = [aws_security_group.bastion.id]
   }
