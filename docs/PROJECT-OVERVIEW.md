@@ -3,7 +3,7 @@
 Reference for the Terraform + Ansible AWS lab: what exists, why it was built that way,
 and how to operate it.
 
-**Last updated:** 2026-08-11 · **AWS account:** `094842496346` · **Region:** `us-east-1`
+**Last updated:** 2026-08-11 · **AWS account:** `<ACCOUNT_ID>` · **Region:** `us-east-1`
 
 ---
 
@@ -267,7 +267,7 @@ hardcoded" is meant to prevent.
 **Verified from the app server, with no credentials stored on it:**
 
 ```
-identity : arn:aws:sts::094842496346:assumed-role/devops-lab-ec2-role/i-093c...
+identity : arn:aws:sts::<ACCOUNT_ID>:assumed-role/devops-lab-ec2-role/i-xxxxxxxxxxxxxxxxx...
 list     : all 3 parameters returned
 read     : all 3 read, both SecureStrings decrypted
 denied   : writing to /other-app/secret -> AccessDenied

@@ -68,3 +68,9 @@ coverage.xml
 junit.xml
 .venv/
 venv/
+
+# macOS
+.DS_Store
+
+# Local inventory with real IPs
+ansible/inventory.ini
