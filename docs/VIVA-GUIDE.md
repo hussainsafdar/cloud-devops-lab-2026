@@ -3,7 +3,7 @@
 Everything built, in the order it was built, with the reasoning behind each
 decision and the evidence that it works.
 
-**Account:** `094842496346` · **Region:** `us-east-1` · **Repo:** `hussainsafdar/cloud-devops-lab-2026`
+**Account:** `<ACCOUNT_ID>` · **Region:** `us-east-1` · **Repo:** `hussainsafdar/cloud-devops-lab-2026`
 
 ---
 
@@ -201,7 +201,7 @@ From [`inventory.ini`](../ansible/inventory.ini):
 
 ```ini
 [app:vars]
-ansible_ssh_common_args='-o ProxyCommand="ssh -W %h:%p -i ~/.ssh/my-devops-key.pem ubuntu@<bastion>"'
+ansible_ssh_common_args='-o ProxyCommand="ssh -W %h:%p -i ~/.ssh/<your-key>.pem ubuntu@<bastion>"'
 ```
 
 Explain the mechanism, not just the config:
@@ -324,7 +324,7 @@ The policy in [`ssm.tf`](../terraform/ssm.tf) has two statements, both non-obvio
 
 ```bash
 sudo docker exec jenkins aws sts get-caller-identity --query Arn --output text
-# arn:aws:sts::094842496346:assumed-role/devops-lab-ec2-role/i-093c18367c8abae8b
+# arn:aws:sts::<ACCOUNT_ID>:assumed-role/devops-lab-ec2-role/i-xxxxxxxxxxxxxxxxx
 
 sudo docker exec jenkins aws ssm get-parameter \
   --name /devops-lab/sonarqube/token --with-decryption \
